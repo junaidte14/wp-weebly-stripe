@@ -103,7 +103,7 @@ function wpwa_stripe_initiate_oauth($product) {
 /**
  * Handle OAuth callback and redirect to Stripe Checkout
  */
-function wpwa_stripe_handle_oauth_callback($product) {
+function wpwa_stripe_handle_oauth_callback_old($product) {
     error_log("WPWA Debug: [Phase 2] Callback reached for Product ID: " . $product['id']);
 
     $client_id = $product['client_id'];
@@ -182,6 +182,117 @@ function wpwa_stripe_handle_oauth_callback($product) {
     wp_redirect($checkout_url);
     exit;
 
+}
+
+/**
+ * Handle OAuth callback and redirect to Stripe Checkout
+ */
+function wpwa_stripe_handle_oauth_callback($product) {
+    error_log("WPWA Debug: [Phase 2] Callback reached for Product ID: " . $product['id']);
+    $client_id = $product['client_id'];
+    $client_secret = $product['client_secret'];
+    
+    $authorization_code = sanitize_text_field($_GET['authorization_code']);
+    $user_id = sanitize_text_field($_GET['user_id'] ?? '');
+    $site_id = sanitize_text_field($_GET['site_id'] ?? '');
+    $callback_url = isset($_GET['callback_url']) ? esc_url_raw($_GET['callback_url']) : '';
+
+    error_log("WPWA Debug: [Phase 2] Context - User: $user_id, Site: $site_id, Code: " . substr($authorization_code, 0, 5) . "...");
+    
+    // Exchange code for access token
+    $weebly_client = new WeeblyClient(
+        $client_id,
+        $client_secret,
+        $user_id,
+        $site_id
+    );
+    
+    $token_response = $weebly_client->getAccessToken($authorization_code, $callback_url);
+    
+    if (empty($token_response->access_token)) {
+        error_log("WPWA Error: [Phase 2] Token exchange failed. Response: " . print_r($token_response, true));
+        wp_die('Failed to obtain access token from Weebly');
+    }
+    
+    $access_token = $token_response->access_token;
+    $final_url = $token_response->callback_url ?? $callback_url;
+
+    error_log("WPWA Debug: [Phase 2] Token obtained. Final Redirect URL: " . $final_url);
+    
+    // Get user info from Weebly API (optional - to get email/name)
+    $user_info = wpwa_stripe_get_weebly_user_info($access_token, $user_id);
+    
+    $email = $user_info['email'] ?? '';
+    $name = $user_info['name'] ?? '';
+
+    error_log("WPWA Debug: [Phase 2] Weebly User Info: Email: $email, Name: $name");
+    
+    // ========================================
+    // UNIVERSAL ACCESS CHECK
+    // Checks: Whitelist, Stripe, Legacy WC
+    // ========================================
+    $access_check = wpwa_user_has_access($user_id, $product['id'], $site_id);
+    
+    if ($access_check['has_access']) {
+        wpwa_stripe_log('Access granted - skipping payment', array(
+            'user_id' => $user_id,
+            'product_id' => $product['id'],
+            'source' => $access_check['source'],
+            'details' => $access_check['details']
+        ));
+        
+        // Update access token (important for legacy customers)
+        wpwa_update_user_access_token(
+            $user_id, 
+            $site_id,
+            $product['id'], 
+            $access_token, 
+            $access_check['source']
+        );
+        
+        // Log access grant for analytics
+        wpwa_log_access_grant($user_id, $site_id, $product['id'], $access_check['source']);
+        
+        // Redirect directly to Weebly finish URL
+        add_filter('allowed_redirect_hosts', function($hosts) {
+            $hosts[] = 'www.weebly.com';
+            return $hosts;
+        });
+        
+        wp_safe_redirect($final_url);
+        exit;
+    }
+    
+    // No existing access - proceed to Stripe Checkout
+    wpwa_stripe_log('No access found - redirecting to checkout', array(
+        'user_id' => $user_id,
+        'product_id' => $product['id']
+    ));
+    
+    // Create Stripe Checkout Session
+    $checkout_args = array(
+        'product_id' => $product['id'],
+        'weebly_user_id' => $user_id,
+        'weebly_site_id' => $site_id,
+        'access_token' => $access_token,
+        'final_url' => $final_url,
+        'pr_id'          => $product['pr_id'] ? $product['pr_id'] : $product['id']
+    );
+    
+    error_log("WPWA Debug: [Phase 2] Creating Stripe Checkout Session with args: " . print_r($checkout_args, true));
+
+    $session_result = wpwa_stripe_create_checkout_session($checkout_args);
+    
+    if (is_array($session_result) && !empty($session_result['url'])) {
+        $checkout_url = $session_result['url'];
+    } else {
+        error_log("WPWA Error: Stripe session failed. Response: " . print_r($session_result, true));
+        wp_die('Failed to create checkout session. Error: ' . ($session_result['message'] ?? 'Unknown Error'));
+    }
+    
+    error_log("WPWA Debug: [Phase 2] Redirecting to Stripe URL: " . $checkout_url);
+    wp_redirect($checkout_url);
+    exit;
 }
 
 /**

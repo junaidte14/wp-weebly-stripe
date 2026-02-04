@@ -49,6 +49,7 @@ if (is_admin()) {
     require_once WPWA_STRIPE_DIR . '/admin/products-page.php';
     require_once WPWA_STRIPE_DIR . '/admin/orders-page.php';
     require_once WPWA_STRIPE_DIR . '/admin/analytics-page.php';
+    require_once WPWA_STRIPE_DIR . '/admin/whitelist-page.php';
 }
 
 // Emails
@@ -58,6 +59,10 @@ require_once WPWA_STRIPE_DIR . '/emails/renewal.php';
 
 // Payment flow
 require_once WPWA_STRIPE_DIR . '/payments/phase-one.php';
+
+// Add after existing includes
+require_once WPWA_STRIPE_DIR . '/includes/access-control.php';
+require_once WPWA_STRIPE_DIR . '/includes/whitelist.php';
 
 // ============================================
 // ACTIVATION / DEACTIVATION
@@ -95,6 +100,7 @@ add_action( 'parse_request', function () {
     // 1. Phase One & OAuth Callback
     if ( strpos( $path, 'wpwa_phase_one' ) === 0 ) {
         require_once WPWA_STRIPE_DIR . '/payments/phase-one.php';
+        error_log("WPWA Debug: Entering handle_phase_one.");
         wpwa_stripe_handle_phase_one();
         exit;
     }
@@ -151,6 +157,15 @@ function wpwa_stripe_admin_menu() {
         'manage_options',
         'wpwa-stripe-orders',
         'wpwa_stripe_render_orders_page'
+    );
+
+    add_submenu_page(
+        'wpwa-stripe',
+        __('Whitelist', 'wpwa-stripe'),
+        __('Whitelist', 'wpwa-stripe'),
+        'manage_options',
+        'wpwa-stripe-whitelist',
+        'wpwa_stripe_render_whitelist_page'
     );
     
     add_submenu_page(
