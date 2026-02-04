@@ -31,12 +31,33 @@ function wpwa_stripe_create_checkout_session($args) {
 
     try {
         $base_url = 'https://' . $_SERVER['HTTP_HOST'] . '/wpwa-stripe-checkout/';
+        
+        // 1. Prepare Line Items
+        $line_items = array(array(
+            'price' => $product['stripe_price_id'],
+            'quantity' => 1
+        ));
+
+        // 2. Marca da Bollo logic (using 77.47 threshold)
+        // Ensure $product['amount'] is in the same unit as the threshold (e.g., Euros)
+        $threshold = 77.47;
+        $price_amount = $product['amount'] ?? 0; 
+        
+        if ($price_amount > $threshold) {
+            $line_items[] = array(
+                'price' => 'price_1Sx8NKJD53wI1t0lSk52gfu0',
+                'quantity' => 1
+            );
+        }
+
         $session_data = array(
             'mode' => $is_recurring ? 'subscription' : 'payment',
-            'line_items' => array(array(
-                'price' => $product['stripe_price_id'],
-                'quantity' => 1
-            )),
+            'line_items' => $line_items,
+            'allow_promotion_codes' => true, 
+            'billing_address_collection' => 'required', 
+            'tax_id_collection' => [
+                'enabled' => true, 
+            ],
             'success_url' => add_query_arg(['action' => 'success', 'session_id' => '{CHECKOUT_SESSION_ID}'], $base_url),
             'cancel_url'  => add_query_arg(['action' => 'cancel'], $base_url),
             'metadata' => array(
@@ -57,19 +78,16 @@ function wpwa_stripe_create_checkout_session($args) {
             );
             if ($stripe_customer_id) {
                 $session_data['customer'] = $stripe_customer_id;
+                // 'auto' syncs the address provided during checkout to the Stripe Customer object
+                $session_data['customer_update'] = [
+                    'address' => 'auto',
+                    'name'    => 'auto'
+                ];
             }
         } else {
-            // If no email is provided from Weebly:
-            // 1. Stripe will automatically show an email field.
-            // 2. For 'payment' mode, we usually use customer_creation, but it's redundant if we just let Stripe handle it.
-            // 3. For 'subscription' mode, Stripe creates the customer automatically.
-            
-            // To be safe and clean, we simply don't pass 'customer' or 'customer_email'.
-            // If it's a 'payment' mode session and we want to ensure a customer is created:
             if (!$is_recurring) {
                 $session_data['customer_creation'] = 'always';
             }
-            // Note: We removed 'customer_creation' for subscriptions to fix your error.
         }
 
         if ($is_recurring) {
