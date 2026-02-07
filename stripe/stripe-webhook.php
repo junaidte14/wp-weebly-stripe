@@ -153,8 +153,10 @@ function wpwa_stripe_process_webhook_event($event) {
  */
 function wpwa_stripe_handle_checkout_completed($session) {
     // Extract metadata
-    $metadata = (array) $session->metadata;
-    
+    error_log("metadata received for checkout.session.completed (orig): " . json_encode($session->metadata));
+    $metadata = $session->metadata->toArray();
+    error_log("metadata received for checkout.session.completed (toarray): " . json_encode($metadata));
+
     if (empty($metadata['weebly_user_id']) || empty($metadata['product_id'])) {
         return array('success' => false, 'message' => 'Missing metadata');
     }
@@ -164,29 +166,19 @@ function wpwa_stripe_handle_checkout_completed($session) {
     
     // Create transaction record
     $transaction_id = wpwa_stripe_create_transaction(array(
-        'transaction_type' => $transaction_type,
-        'stripe_payment_intent_id' => $session->payment_intent ?? null,
-        'stripe_subscription_id' => $session->subscription ?? null,
-        'stripe_customer_id' => $session->customer,
-        'weebly_user_id' => $metadata['weebly_user_id'],
-        'weebly_site_id' => $metadata['weebly_site_id'] ?? null,
-        'product_id' => $metadata['product_id'],
-        'amount' => $session->amount_total / 100,
-        'currency' => strtoupper($session->currency),
-        'status' => 'succeeded',
-        'access_token' => $metadata['access_token'] ?? null,
-        'final_url' => $metadata['final_url'] ?? null,
-        'metadata' => json_encode(array(
-            'session_id' => $session->id,
-            'payment_status' => $session->payment_status
-        ))
+        'transaction_type'         => $transaction_type,
+        'stripe_payment_intent_id' => $session->payment_intent ?? null, 
+        'stripe_subscription_id'   => $session->subscription ?? null,
+        'stripe_customer_id'       => $session->customer,
+        'weebly_user_id'           => $metadata['weebly_user_id'],
+        'weebly_site_id'           => $metadata['weebly_site_id'] ?? null,
+        'product_id'               => $metadata['product_id'],
+        'amount'                   => $session->amount_total / 100,
+        'currency'                 => strtoupper($session->currency),
+        'status'                   => 'succeeded',
+        'access_token'             => $metadata['access_token'] ?? null,
+        'metadata'                 => json_encode($metadata)
     ));
-    
-    // If subscription, it will be handled by customer.subscription.created
-    // For one-time, notify Weebly immediately
-    if ($transaction_type === 'one_time') {
-        wpwa_stripe_notify_weebly($transaction_id);
-    }
     
     // Send receipt email
     wpwa_stripe_send_receipt_email($transaction_id);
@@ -233,28 +225,39 @@ function wpwa_stripe_handle_payment_failed($payment_intent) {
  * Handle customer.subscription.created
  */
 function wpwa_stripe_handle_subscription_created($subscription) {
-    $metadata = (array) $subscription->metadata;
+    error_log("metadata received for customer.subscription.created (orig): " . json_encode($subscription->metadata));
+    $metadata = $subscription->metadata ? $subscription->metadata->toArray() : array();
+    error_log("metadata received for customer.subscription.created (processed): " . json_encode($metadata));
+
+    if (empty($metadata)) {
+        return array('success' => false, 'message' => 'Missing metadata');
+    }
+    // 3. Robust Date Logic (Handling the missing current_period_start in .created event)
+    $start_ts = $subscription->current_period_start ?? $subscription->billing_cycle_anchor ?? time();
     
-    // Create subscription record
+    // If current_period_end is null, look into the items list
+    $end_ts = $subscription->current_period_end;
+    if (!$end_ts && !empty($subscription->items->data)) {
+        $end_ts = $subscription->items->data[0]->current_period_end;
+    }
+    // Final fallback if still null: +1 year (since your plan is yearly)
+    if (!$end_ts) { $end_ts = strtotime('+1 year', $start_ts); }
+
     wpwa_stripe_create_subscription_record(array(
         'stripe_subscription_id' => $subscription->id,
-        'stripe_customer_id' => $subscription->customer,
-        'weebly_user_id' => $metadata['weebly_user_id'] ?? '',
-        'weebly_site_id' => $metadata['weebly_site_id'] ?? null,
-        'product_id' => $metadata['product_id'] ?? 0,
-        'status' => $subscription->status,
-        'current_period_start' => date('Y-m-d H:i:s', $subscription->current_period_start),
-        'current_period_end' => date('Y-m-d H:i:s', $subscription->current_period_end),
-        'cancel_at_period_end' => $subscription->cancel_at_period_end ? 1 : 0,
-        'access_token' => $metadata['access_token'] ?? null,
-        'metadata' => $metadata
+        'stripe_customer_id'     => $subscription->customer,
+        'weebly_user_id'         => $metadata['weebly_user_id'] ?? '',
+        'weebly_site_id'         => $metadata['weebly_site_id'] ?? null,
+        'product_id'             => $metadata['product_id'] ?? 0,
+        'status'                 => $subscription->status,
+        'current_period_start'   => date('Y-m-d H:i:s', $start_ts),
+        'current_period_end'     => date('Y-m-d H:i:s', $end_ts),
+        'cancel_at_period_end'   => $subscription->cancel_at_period_end ? 1 : 0,
+        'access_token'           => $metadata['access_token'] ?? null,
+        'metadata'               => json_encode($metadata)
     ));
-    
-    // Notify Weebly for initial subscription
-    $transaction = wpwa_stripe_get_transaction_by_subscription($subscription->id);
-    if ($transaction && !$transaction['weebly_notified']) {
-        wpwa_stripe_notify_weebly($transaction['id']);
-    }
+
+    do_action('wpwa_stripe_subscription_created', $subscription->id);
     
     return array('success' => true);
 }
@@ -263,10 +266,14 @@ function wpwa_stripe_handle_subscription_created($subscription) {
  * Handle customer.subscription.updated
  */
 function wpwa_stripe_handle_subscription_updated($subscription) {
+    error_log("metadata received for customer.subscription.updated (orig): " . json_encode($subscription));
+    $start_ts = $subscription->current_period_start ?? time();
+    $end_ts   = $subscription->current_period_end ?? strtotime('+1 year', $start_ts);
+
     wpwa_stripe_update_subscription_record($subscription->id, array(
-        'status' => $subscription->status,
-        'current_period_start' => date('Y-m-d H:i:s', $subscription->current_period_start),
-        'current_period_end' => date('Y-m-d H:i:s', $subscription->current_period_end),
+        'status'               => $subscription->status,
+        'current_period_start' => date('Y-m-d H:i:s', $start_ts),
+        'current_period_end'   => date('Y-m-d H:i:s', $end_ts),
         'cancel_at_period_end' => $subscription->cancel_at_period_end ? 1 : 0
     ));
     
@@ -287,43 +294,42 @@ function wpwa_stripe_handle_subscription_deleted($subscription) {
 }
 
 /**
- * Handle invoice.paid (subscription renewals)
+ * Handle invoice.paid (subscription renewals and initial payments)
  */
 function wpwa_stripe_handle_invoice_paid($invoice) {
-    // Skip if not subscription invoice
-    if (!$invoice->subscription) {
-        return array('success' => true);
-    }
+    if (!$invoice->subscription) return array('success' => true);
     
-    // Get subscription details
     $subscription_record = wpwa_stripe_get_subscription_by_stripe_id($invoice->subscription);
-    
     if (!$subscription_record) {
+        wpwa_stripe_log('Invoice paid: Subscription record not found: ' . $invoice->subscription);
         return array('success' => false, 'message' => 'Subscription not found');
     }
     
-    // Create renewal transaction
+    // Update the local subscription validity dates
+    wpwa_stripe_update_subscription_record($invoice->subscription, array(
+        'status'               => 'active',
+        'current_period_start' => date('Y-m-d H:i:s', $invoice->period_start),
+        'current_period_end'   => date('Y-m-d H:i:s', $invoice->period_end),
+    ));
+
     $transaction_id = wpwa_stripe_create_transaction(array(
-        'transaction_type' => 'subscription_renewal',
-        'stripe_invoice_id' => $invoice->id,
+        'transaction_type'       => 'subscription_renewal',
+        'stripe_invoice_id'      => $invoice->id,
         'stripe_subscription_id' => $invoice->subscription,
-        'stripe_customer_id' => $invoice->customer,
-        'weebly_user_id' => $subscription_record['weebly_user_id'],
-        'weebly_site_id' => $subscription_record['weebly_site_id'],
-        'product_id' => $subscription_record['product_id'],
-        'amount' => $invoice->amount_paid / 100,
-        'currency' => strtoupper($invoice->currency),
-        'status' => 'succeeded',
-        'access_token' => $subscription_record['access_token'],
-        'metadata' => json_encode(array(
-            'invoice_id' => $invoice->id,
-            'period_start' => $invoice->period_start,
-            'period_end' => $invoice->period_end
-        ))
+        'stripe_customer_id'     => $invoice->customer,
+        'weebly_user_id'         => $subscription_record['weebly_user_id'],
+        'weebly_site_id'         => $subscription_record['weebly_site_id'],
+        'product_id'             => $subscription_record['product_id'],
+        'amount'                 => $invoice->amount_paid / 100,
+        'currency'               => strtoupper($invoice->currency),
+        'status'                 => 'succeeded',
+        'access_token'           => $subscription_record['access_token'],
+        'metadata'               => json_encode(['invoice_id' => $invoice->id])
     ));
     
-    // Send renewal email
-    wpwa_stripe_send_renewal_email($transaction_id);
+    if ($transaction_id) {
+        wpwa_stripe_send_renewal_email($transaction_id);
+    }
     
     return array('success' => true, 'transaction_id' => $transaction_id);
 }

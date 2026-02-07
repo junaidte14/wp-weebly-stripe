@@ -180,7 +180,7 @@ function wpwa_stripe_handle_checkout_cancel() {
 /**
  * Route handler for checkout endpoints
  */
-add_action('template_redirect', 'wpwa_stripe_checkout_router');
+//add_action('template_redirect', 'wpwa_stripe_checkout_router');
 function wpwa_stripe_checkout_router() {
     // Get the action from the URL ?action=...
     $action = isset($_GET['action']) ? sanitize_text_field($_GET['action']) : '';

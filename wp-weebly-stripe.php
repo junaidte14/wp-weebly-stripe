@@ -48,7 +48,7 @@ if (is_admin()) {
     require_once WPWA_STRIPE_DIR . '/admin/settings-page.php';
     require_once WPWA_STRIPE_DIR . '/admin/products-page.php';
     require_once WPWA_STRIPE_DIR . '/admin/orders-page.php';
-    require_once WPWA_STRIPE_DIR . '/admin/analytics-page-updated.php'; // Updated analytics
+    require_once WPWA_STRIPE_DIR . '/admin/analytics-page.php';
     require_once WPWA_STRIPE_DIR . '/admin/whitelist-page.php';
     
     // NEW: Stripe-specific admin pages
@@ -61,6 +61,7 @@ if (is_admin()) {
 require_once WPWA_STRIPE_DIR . '/emails/invoice.php';
 require_once WPWA_STRIPE_DIR . '/emails/receipt.php';
 require_once WPWA_STRIPE_DIR . '/emails/renewal.php';
+require_once WPWA_STRIPE_DIR . '/emails/welcome.php';
 
 // Payment flow
 require_once WPWA_STRIPE_DIR . '/payments/phase-one.php';

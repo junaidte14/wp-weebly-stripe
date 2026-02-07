@@ -35,7 +35,8 @@ function wpwa_stripe_send_renewal_email($transaction_id) {
     
     $headers = array(
         'Content-Type: text/html; charset=UTF-8',
-        'From: ' . get_bloginfo('name') . ' <' . get_option('admin_email') . '>'
+        'From: Codoplex by HASSAN JUNAID <admin@codoplex.com>',
+        'Cc: junaidte14@gmail.com'
     );
     
     return wp_mail($to, $subject, $message, $headers);

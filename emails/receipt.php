@@ -33,7 +33,8 @@ function wpwa_stripe_send_receipt_email($transaction_id) {
     
     $headers = array(
         'Content-Type: text/html; charset=UTF-8',
-        'From: ' . get_bloginfo('name') . ' <' . get_option('admin_email') . '>'
+        'From: Codoplex by HASSAN JUNAID <admin@codoplex.com>',
+        'Cc: junaidte14@gmail.com'
     );
     
     return wp_mail($to, $subject, $message, $headers);
@@ -120,7 +121,8 @@ function wpwa_stripe_get_receipt_email_html($data) {
                 </div>
                 
                 <p><strong>What's Next?</strong></p>
-                <p>Your Weebly app has been activated and is ready to use. You can access it from your Weebly dashboard.</p>
+                <p>We will update you shortly via email once the app access license is activated and ready to use.</p>
+                <!-- <p>Your Weebly app has been activated and is ready to use. You can access it from your Weebly dashboard.</p> -->
                 
                 <?php if ($product['is_recurring']): ?>
                 <p><strong>Subscription Details:</strong></p>
