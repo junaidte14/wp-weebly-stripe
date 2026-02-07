@@ -150,25 +150,60 @@ function wpwa_stripe_process_webhook_event($event) {
 
 /**
  * Handle checkout.session.completed
+ * Finalized to handle out-of-order Stripe webhooks and metadata synchronization.
  */
 function wpwa_stripe_handle_checkout_completed($session) {
-    // Extract metadata
-    error_log("metadata received for checkout.session.completed (orig): " . json_encode($session->metadata));
-    $metadata = $session->metadata->toArray();
-    error_log("metadata received for checkout.session.completed (toarray): " . json_encode($metadata));
+    // 1. Extract metadata safely (The source of truth for your app)
+    $metadata = ($session->metadata) ? $session->metadata->toArray() : [];
+    
+    // Log for debugging (Stripe SDK objects must be JSON encoded to log correctly)
+    error_log("Stripe Checkout Metadata: " . json_encode($metadata));
 
+    // 2. Identification Logic
+    $subscription_id = $session->subscription ?? null;
+    $invoice_id = $session->invoice ?? null;
+
+    // 3. Race Condition Check
+    // If invoice.paid already created the transaction, we sync the missing metadata/details.
+    if ($subscription_id) {
+        $existing = wpwa_stripe_get_transaction_by_subscription($subscription_id);
+        if ($existing) {
+            // SYNC LOGIC: Update the existing record with data only Checkout Session has.
+            wpwa_stripe_create_transaction(array(
+                'stripe_subscription_id'   => $subscription_id,
+                'stripe_invoice_id'        => $invoice_id,
+                'transaction_type'         => 'subscription_initial',
+                'stripe_customer_id'       => $session->customer,
+                'weebly_user_id'           => $metadata['weebly_user_id'] ?? $existing['weebly_user_id'],
+                'weebly_site_id'           => $metadata['weebly_site_id'] ?? $existing['weebly_site_id'],
+                'product_id'               => $metadata['product_id'] ?? $existing['product_id'],
+                'amount'                   => $session->amount_total / 100,
+                'currency'                 => strtoupper($session->currency),
+                'status'                   => 'succeeded',
+                'access_token'             => $metadata['access_token'] ?? $existing['access_token'],
+                'metadata'                 => json_encode($metadata) 
+            ));
+
+            wpwa_stripe_log("Updated existing transaction record for Sub: " . $subscription_id);
+            return array('success' => true, 'message' => 'Synced existing record from prior invoice event');
+        }
+    }
+
+    // 4. Validation (If no existing record, ensure we have what we need to create one)
     if (empty($metadata['weebly_user_id']) || empty($metadata['product_id'])) {
+        wpwa_stripe_log('Checkout Error: Missing metadata in session ' . $session->id);
         return array('success' => false, 'message' => 'Missing metadata');
     }
     
-    // Determine transaction type
-    $transaction_type = $session->mode === 'subscription' ? 'subscription_initial' : 'one_time';
+    // 5. Determine transaction type
+    $transaction_type = ($session->mode === 'subscription') ? 'subscription_initial' : 'one_time';
     
-    // Create transaction record
+    // 6. Create or Update via our robust helper
     $transaction_id = wpwa_stripe_create_transaction(array(
         'transaction_type'         => $transaction_type,
         'stripe_payment_intent_id' => $session->payment_intent ?? null, 
-        'stripe_subscription_id'   => $session->subscription ?? null,
+        'stripe_subscription_id'   => $subscription_id,
+        'stripe_invoice_id'        => $invoice_id,
         'stripe_customer_id'       => $session->customer,
         'weebly_user_id'           => $metadata['weebly_user_id'],
         'weebly_site_id'           => $metadata['weebly_site_id'] ?? null,
@@ -180,8 +215,10 @@ function wpwa_stripe_handle_checkout_completed($session) {
         'metadata'                 => json_encode($metadata)
     ));
     
-    // Send receipt email
-    wpwa_stripe_send_receipt_email($transaction_id);
+    // 7. Communication
+    if ($transaction_id) {
+        wpwa_stripe_send_receipt_email($transaction_id);
+    }
     
     return array('success' => true, 'transaction_id' => $transaction_id);
 }
@@ -298,24 +335,32 @@ function wpwa_stripe_handle_subscription_deleted($subscription) {
  */
 function wpwa_stripe_handle_invoice_paid($invoice) {
     if (!$invoice->subscription) return array('success' => true);
-    
-    $subscription_record = wpwa_stripe_get_subscription_by_stripe_id($invoice->subscription);
-    if (!$subscription_record) {
-        wpwa_stripe_log('Invoice paid: Subscription record not found: ' . $invoice->subscription);
-        return array('success' => false, 'message' => 'Subscription not found');
-    }
-    
-    // Update the local subscription validity dates
-    wpwa_stripe_update_subscription_record($invoice->subscription, array(
-        'status'               => 'active',
-        'current_period_start' => date('Y-m-d H:i:s', $invoice->period_start),
-        'current_period_end'   => date('Y-m-d H:i:s', $invoice->period_end),
-    ));
 
+    $subscription_id = $invoice->subscription;
+    $subscription_record = wpwa_stripe_get_subscription_by_stripe_id($subscription_id);
+
+    // RACE CONDITION FIX: If not in DB, fetch from Stripe API
+    if (!$subscription_record) {
+        try {
+            $stripe_sub = \Stripe\Subscription::retrieve($subscription_id);
+            $metadata = $stripe_sub->metadata->toArray();
+            
+            // Create the record now so we don't lose the metadata
+            wpwa_stripe_handle_subscription_created($stripe_sub);
+            
+            // Re-fetch the record we just created
+            $subscription_record = wpwa_stripe_get_subscription_by_stripe_id($subscription_id);
+        } catch (Exception $e) {
+            wpwa_stripe_log("API Fetch failed for Sub: " . $subscription_id);
+            return array('success' => false, 'message' => 'Subscription metadata unavailable');
+        }
+    }
+
+    // Now proceed with creating the transaction and notifying Weebly
     $transaction_id = wpwa_stripe_create_transaction(array(
         'transaction_type'       => 'subscription_renewal',
         'stripe_invoice_id'      => $invoice->id,
-        'stripe_subscription_id' => $invoice->subscription,
+        'stripe_subscription_id' => $subscription_id,
         'stripe_customer_id'     => $invoice->customer,
         'weebly_user_id'         => $subscription_record['weebly_user_id'],
         'weebly_site_id'         => $subscription_record['weebly_site_id'],
@@ -324,14 +369,9 @@ function wpwa_stripe_handle_invoice_paid($invoice) {
         'currency'               => strtoupper($invoice->currency),
         'status'                 => 'succeeded',
         'access_token'           => $subscription_record['access_token'],
-        'metadata'               => json_encode(['invoice_id' => $invoice->id])
     ));
-    
-    if ($transaction_id) {
-        wpwa_stripe_send_renewal_email($transaction_id);
-    }
-    
-    return array('success' => true, 'transaction_id' => $transaction_id);
+
+    return array('success' => true);
 }
 
 /**
