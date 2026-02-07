@@ -201,10 +201,13 @@ function wpwa_stripe_get_total_revenue($status = 'succeeded') {
     
     $table = $wpdb->prefix . 'wpwa_stripe_transactions';
     
-    return $wpdb->get_var($wpdb->prepare(
+    $total = $wpdb->get_var($wpdb->prepare(
         "SELECT SUM(amount) FROM `{$table}` WHERE status = %s",
         $status
     ));
+
+    // Casting to float ensures null/empty results become 0.0
+    return (float) $total;
 }
 
 /**
