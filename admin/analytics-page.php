@@ -1,7 +1,7 @@
 <?php
 /**
- * Analytics Dashboard - UNIFIED VIEW
- * Shows: Legacy WC + Stripe Combined
+ * Analytics Dashboard - UNIFIED VIEW (UPDATED)
+ * Shows: Legacy WC + Stripe Combined + Stripe Subscriptions
  */
 
 if (!defined('ABSPATH')) exit;
@@ -17,8 +17,8 @@ function wpwa_stripe_render_analytics_page() {
     // Get UNIFIED stats
     $stats = wpwa_get_unified_revenue_stats();
     
-    // Get recent transactions (unified)
-    $recent_transactions = wpwa_get_unified_transactions(array('limit' => 10));
+    // Get recent transactions (unified) - now includes subscription renewals
+    $recent_transactions = wpwa_get_unified_transactions_with_subscriptions(array('limit' => 10));
     
     // Get revenue by source (for chart)
     $revenue_by_source = array(
@@ -196,4 +196,127 @@ function wpwa_stripe_render_analytics_page() {
     }
     </script>
     <?php
+}
+
+/**
+ * Get unified transactions INCLUDING subscription renewals
+ */
+function wpwa_get_unified_transactions_with_subscriptions($args = array()) {
+    global $wpdb;
+    
+    $defaults = array(
+        'status' => '',
+        'type' => '',
+        'source' => '',
+        'search' => '',
+        'limit' => 25,
+        'offset' => 0,
+        'orderby' => 'date',
+        'order' => 'DESC'
+    );
+    
+    $args = wp_parse_args($args, $defaults);
+    
+    $transactions = array();
+    
+    // Get Stripe transactions (ALL types including subscription_initial and subscription_renewal)
+    if ($args['source'] !== 'woocommerce') {
+        $stripe_trans = wpwa_get_stripe_transactions_formatted_all($args);
+        $transactions = array_merge($transactions, $stripe_trans);
+    }
+    
+    // Get Legacy WC transactions (if not filtering for stripe only)
+    if ($args['source'] !== 'stripe') {
+        $legacy_trans = wpwa_get_legacy_transactions_formatted($args);
+        $transactions = array_merge($transactions, $legacy_trans);
+    }
+    
+    // Sort by date
+    usort($transactions, function($a, $b) use ($args) {
+        $time_a = strtotime($a['date']);
+        $time_b = strtotime($b['date']);
+        return $args['order'] === 'DESC' ? $time_b - $time_a : $time_a - $time_b;
+    });
+    
+    // Apply limit/offset
+    return array_slice($transactions, $args['offset'], $args['limit']);
+}
+
+/**
+ * Get Stripe transactions in unified format (ALL transaction types)
+ */
+function wpwa_get_stripe_transactions_formatted_all($args) {
+    global $wpdb;
+    
+    $table = $wpdb->prefix . 'wpwa_stripe_transactions';
+    
+    $where = array('1=1');
+    $values = array();
+    
+    if ($args['status']) {
+        $status_map = array(
+            'succeeded' => 'succeeded',
+            'pending' => 'pending',
+            'failed' => 'failed',
+            'refunded' => 'refunded'
+        );
+        if (isset($status_map[$args['status']])) {
+            $where[] = 'status = %s';
+            $values[] = $status_map[$args['status']];
+        }
+    }
+    
+    if ($args['type'] === 'one_time') {
+        $where[] = 'transaction_type = %s';
+        $values[] = 'one_time';
+    } elseif ($args['type'] === 'subscription') {
+        $where[] = 'transaction_type IN (%s, %s)';
+        $values[] = 'subscription_initial';
+        $values[] = 'subscription_renewal';
+    }
+    
+    if ($args['search']) {
+        $where[] = 'weebly_user_id LIKE %s';
+        $values[] = '%' . $wpdb->esc_like($args['search']) . '%';
+    }
+    
+    $where_sql = implode(' AND ', $where);
+    
+    $query = "SELECT * FROM `{$table}` WHERE {$where_sql} ORDER BY created_at DESC LIMIT 1000";
+    
+    if (!empty($values)) {
+        $query = $wpdb->prepare($query, $values);
+    }
+    
+    $results = $wpdb->get_results($query, ARRAY_A);
+    
+    $formatted = array();
+    foreach ($results as $row) {
+        $product = wpwa_stripe_get_product($row['product_id']);
+        
+        // Get customer email if available
+        $customer_email = '';
+        if ($row['stripe_customer_id']) {
+            $customer = wpwa_stripe_get_customer_by_stripe_id($row['stripe_customer_id']);
+            if ($customer) {
+                $customer_email = $customer['email'];
+            }
+        }
+        
+        $formatted[] = array(
+            'id' => 'ST-' . $row['id'],
+            'source' => 'stripe',
+            'date' => $row['created_at'],
+            'type' => $row['transaction_type'],
+            'product_name' => $product ? $product['name'] : 'Unknown',
+            'weebly_user_id' => $row['weebly_user_id'],
+            'customer_email' => $customer_email,
+            'amount' => $row['amount'],
+            'status' => $row['status'],
+            'stripe_payment_id' => $row['stripe_payment_intent_id'],
+            'wc_order_id' => null
+        );
+    }
+    
+    return $formatted;
 }

@@ -41,20 +41,13 @@ function wpwa_stripe_get_expiring_subscriptions($days = 7) {
  */
 function wpwa_stripe_get_mrr() {
     global $wpdb;
-    
     $table = $wpdb->prefix . 'wpwa_stripe_subscriptions';
-    $trans_table = $wpdb->prefix . 'wpwa_stripe_transactions';
-    
-    // Get latest transaction for each active subscription
-    return $wpdb->get_var("
-        SELECT SUM(t.amount) 
-        FROM `{$trans_table}` t
-        INNER JOIN `{$table}` s ON t.stripe_subscription_id = s.stripe_subscription_id
-        WHERE s.status = 'active'
-        AND t.id IN (
-            SELECT MAX(id) FROM `{$trans_table}` 
-            WHERE stripe_subscription_id IS NOT NULL 
-            GROUP BY stripe_subscription_id
-        )
+    // Sum the 'amount' column for all active subscriptions
+    $result = $wpdb->get_var("
+        SELECT SUM(amount) 
+        FROM `{$table}` 
+        WHERE status = 'active'
     ");
+    // Cast the result to a float (returns 0.0 if result is null)
+    return (float) $result;
 }

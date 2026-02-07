@@ -48,8 +48,13 @@ if (is_admin()) {
     require_once WPWA_STRIPE_DIR . '/admin/settings-page.php';
     require_once WPWA_STRIPE_DIR . '/admin/products-page.php';
     require_once WPWA_STRIPE_DIR . '/admin/orders-page.php';
-    require_once WPWA_STRIPE_DIR . '/admin/analytics-page.php';
+    require_once WPWA_STRIPE_DIR . '/admin/analytics-page-updated.php'; // Updated analytics
     require_once WPWA_STRIPE_DIR . '/admin/whitelist-page.php';
+    
+    // NEW: Stripe-specific admin pages
+    require_once WPWA_STRIPE_DIR . '/admin/stripe-transactions-page.php';
+    require_once WPWA_STRIPE_DIR . '/admin/stripe-subscriptions-page.php';
+    require_once WPWA_STRIPE_DIR . '/admin/stripe-customers-page.php';
 }
 
 // Emails
@@ -153,10 +158,38 @@ function wpwa_stripe_admin_menu() {
     add_submenu_page(
         'wpwa-stripe',
         __('Orders', 'wpwa-stripe'),
-        __('Orders', 'wpwa-stripe'),
+        __('Orders (Unified)', 'wpwa-stripe'),
         'manage_options',
         'wpwa-stripe-orders',
         'wpwa_stripe_render_orders_page'
+    );
+    
+    // NEW: Stripe-specific submenu pages
+    add_submenu_page(
+        'wpwa-stripe',
+        __('Stripe Transactions', 'wpwa-stripe'),
+        __('Stripe Transactions', 'wpwa-stripe'),
+        'manage_options',
+        'wpwa-stripe-transactions',
+        'wpwa_stripe_render_transactions_page'
+    );
+    
+    add_submenu_page(
+        'wpwa-stripe',
+        __('Stripe Subscriptions', 'wpwa-stripe'),
+        __('Stripe Subscriptions', 'wpwa-stripe'),
+        'manage_options',
+        'wpwa-stripe-subscriptions',
+        'wpwa_stripe_render_subscriptions_page'
+    );
+    
+    add_submenu_page(
+        'wpwa-stripe',
+        __('Stripe Customers', 'wpwa-stripe'),
+        __('Stripe Customers', 'wpwa-stripe'),
+        'manage_options',
+        'wpwa-stripe-customers',
+        'wpwa_stripe_render_customers_page'
     );
 
     add_submenu_page(
