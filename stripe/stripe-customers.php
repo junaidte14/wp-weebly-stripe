@@ -120,3 +120,72 @@ function wpwa_stripe_update_customer_email($weebly_user_id, $new_email) {
         array('weebly_user_id' => $weebly_user_id)
     );
 }
+
+/**
+ * Sync a Stripe customer into local DB.
+ * Used by webhooks since Weebly never provides email/name.
+ * Safe to call multiple times - skips if customer already exists.
+ */
+function wpwa_stripe_sync_customer_from_stripe( $stripe_customer_id, $weebly_user_id = null ) {
+    global $wpdb;
+
+    if ( empty( $stripe_customer_id ) ) {
+        return null;
+    }
+
+    $table = $wpdb->prefix . 'wpwa_stripe_customers';
+
+    // Already in DB? Nothing to do.
+    $existing = wpwa_stripe_get_customer_by_stripe_id( $stripe_customer_id );
+    if ( $existing ) {
+        return $existing['stripe_customer_id'];
+    }
+
+    if ( ! wpwa_stripe_init() ) {
+        return null;
+    }
+
+    try {
+        $stripe_customer = \Stripe\Customer::retrieve( $stripe_customer_id );
+
+        $email = $stripe_customer->email ?? '';
+        $name  = $stripe_customer->name  ?? '';
+
+        // Fall back to metadata if weebly_user_id wasn't passed in
+        if ( empty( $weebly_user_id ) ) {
+            $weebly_user_id = $stripe_customer->metadata['weebly_user_id'] ?? null;
+        }
+
+        if ( empty( $weebly_user_id ) ) {
+            wpwa_stripe_log( 'Cannot sync customer: weebly_user_id missing', [
+                'stripe_customer_id' => $stripe_customer_id,
+            ] );
+            return null;
+        }
+
+        $wpdb->insert( $table, [
+            'stripe_customer_id' => $stripe_customer_id,
+            'weebly_user_id'     => $weebly_user_id,
+            'email'              => $email,
+            'name'               => $name,
+            'metadata'           => json_encode( [
+                'synced_via' => 'webhook',
+                'synced_at'  => current_time( 'mysql' ),
+            ] ),
+        ] );
+
+        wpwa_stripe_log( 'Customer synced from Stripe', [
+            'stripe_customer_id' => $stripe_customer_id,
+            'weebly_user_id'     => $weebly_user_id,
+            'email'              => $email,
+        ] );
+
+        return $stripe_customer_id;
+
+    } catch ( Exception $e ) {
+        wpwa_stripe_log( 'Customer sync error: ' . $e->getMessage(), [
+            'stripe_customer_id' => $stripe_customer_id,
+        ] );
+        return null;
+    }
+}

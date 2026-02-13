@@ -45,6 +45,7 @@ function wpwa_stripe_create_transaction($data) {
         'weebly_user_id'           => $data['weebly_user_id'],
         'weebly_site_id'           => $data['weebly_site_id'] ?? null,
         'product_id'               => $data['product_id'],
+        'final_url'               => $data['final_url'] ?? null,
         'amount'                   => $data['amount'],
         'currency'                 => strtoupper($data['currency']),
         'status'                   => $data['status'] ?? 'succeeded',

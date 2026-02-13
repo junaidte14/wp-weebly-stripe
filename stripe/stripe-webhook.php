@@ -177,6 +177,7 @@ function wpwa_stripe_handle_checkout_completed($session) {
                 'weebly_user_id'           => $metadata['weebly_user_id'] ?? $existing['weebly_user_id'],
                 'weebly_site_id'           => $metadata['weebly_site_id'] ?? $existing['weebly_site_id'],
                 'product_id'               => $metadata['product_id'] ?? $existing['product_id'],
+                'final_url'               => $metadata['final_url'] ?? $existing['final_url'],
                 'amount'                   => $session->amount_total / 100,
                 'currency'                 => strtoupper($session->currency),
                 'status'                   => 'succeeded',
@@ -208,12 +209,17 @@ function wpwa_stripe_handle_checkout_completed($session) {
         'weebly_user_id'           => $metadata['weebly_user_id'],
         'weebly_site_id'           => $metadata['weebly_site_id'] ?? null,
         'product_id'               => $metadata['product_id'],
+        'final_url'               => $metadata['final_url'],
         'amount'                   => $session->amount_total / 100,
         'currency'                 => strtoupper($session->currency),
         'status'                   => 'succeeded',
         'access_token'             => $metadata['access_token'] ?? null,
         'metadata'                 => json_encode($metadata)
     ));
+
+    if ( ! empty( $session->customer ) && ! empty( $metadata['weebly_user_id'] ) ) {
+        wpwa_stripe_sync_customer_from_stripe( $session->customer, $metadata['weebly_user_id'] );
+    }
     
     // 7. Communication
     if ($transaction_id) {
@@ -365,6 +371,7 @@ function wpwa_stripe_handle_invoice_paid($invoice) {
         'weebly_user_id'         => $subscription_record['weebly_user_id'],
         'weebly_site_id'         => $subscription_record['weebly_site_id'],
         'product_id'             => $subscription_record['product_id'],
+        'final_url'             => $subscription_record['final_url'],
         'amount'                 => $invoice->amount_paid / 100,
         'currency'               => strtoupper($invoice->currency),
         'status'                 => 'succeeded',
