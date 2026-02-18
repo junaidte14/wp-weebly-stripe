@@ -12,6 +12,23 @@ function wpwa_stripe_render_transactions_page() {
     if (!current_user_can('manage_options')) {
         wp_die(__('Unauthorized', 'wpwa-stripe'));
     }
+
+    if ( isset($_GET['action']) && $_GET['action'] === 'notify_weebly' && isset($_GET['transaction_id'])) {
+
+        $transaction_id = intval($_GET['transaction_id']);
+
+        check_admin_referer('wpwa_notify_weebly_' . $transaction_id);
+
+        $result = wpwa_stripe_notify_weebly($transaction_id);
+
+        if ($result) {
+            wp_redirect(add_query_arg('weebly_status', 'success', admin_url('admin.php?page=wpwa-stripe-transactions')));
+        } else {
+            wp_redirect(add_query_arg('weebly_status', 'error', admin_url('admin.php?page=wpwa-stripe-transactions')));
+        }
+        exit;
+    }
+
     
     // Get filter parameters
     $status_filter = isset($_GET['status']) ? sanitize_text_field($_GET['status']) : '';
@@ -46,6 +63,19 @@ function wpwa_stripe_render_transactions_page() {
     $pending_revenue = wpwa_stripe_get_total_revenue('pending');
     $total_transactions = wpwa_stripe_get_transaction_count();
     $succeeded_count = wpwa_stripe_get_transaction_count('succeeded');
+
+    if (isset($_GET['weebly_status'])) {
+        if ($_GET['weebly_status'] === 'success') {
+            echo '<div class="notice notice-success is-dismissible">
+                    <p>Weebly notified successfully.</p>
+                </div>';
+        }
+        if ($_GET['weebly_status'] === 'error') {
+            echo '<div class="notice notice-error is-dismissible">
+                    <p>Failed to notify Weebly. Check logs.</p>
+                </div>';
+        }
+    }
     
     ?>
     <div class="wrap wpwa-transactions-wrap">
@@ -174,7 +204,17 @@ function wpwa_stripe_render_transactions_page() {
                                 <?php endif; ?>
                             </td>
                             <td>
-                                <?php 
+                                <?php
+                                $notify_url = wp_nonce_url(
+                                    admin_url('admin.php?page=wpwa-stripe-transactions&action=notify_weebly&transaction_id=' . $transaction['id']),
+                                    'wpwa_notify_weebly_' . $transaction['id']
+                                );
+
+                                if (!$transaction['weebly_notified']) {
+                                    echo '<a href="' . esc_url($notify_url) . '" class="button button-small">Notify to Weebly</a>';
+                                } else {
+                                    echo '<span style="color:green;font-weight:600;">✔ Notified</span>';
+                                }
                                 $stripe_id = $transaction['stripe_payment_intent_id'] ?: $transaction['stripe_invoice_id'];
                                 if ($stripe_id): 
                                     $url_path = $transaction['stripe_payment_intent_id'] ? 'payments' : 'invoices';

@@ -434,74 +434,111 @@ function wpwa_stripe_handle_refund($charge) {
  * Notify Weebly API
  */
 function wpwa_stripe_notify_weebly($transaction_id) {
+
     $transaction = wpwa_stripe_get_transaction($transaction_id);
-    
-    if (!$transaction || $transaction['weebly_notified']) {
+
+    if (!$transaction || !empty($transaction['weebly_notified'])) {
         return false;
     }
-    
+
     $product = wpwa_stripe_get_product($transaction['product_id']);
     if (!$product) {
         return false;
     }
-    
+
     // Decrypt access token
-    $access_token = wpwa_stripe_decrypt_token($transaction['access_token']);
-    
+    $access_token = trim(wpwa_stripe_decrypt_token($transaction['access_token']));
+
     if (empty($access_token)) {
-        wpwa_stripe_log('Cannot notify Weebly: missing access token', array('transaction_id' => $transaction_id));
+        wpwa_stripe_log('Cannot notify Weebly: missing access token', [
+            'transaction_id' => $transaction_id
+        ]);
         return false;
     }
-    
-    // Calculate fees (Stripe takes 2.9% + $0.30)
-    $gross = $transaction['amount'];
-    $fee = ($gross * 0.029) + 0.30;
-    $net = $gross - $fee;
-    $weebly_payout = $net * 0.30; // Weebly takes 30%
-    
-    // Send notification to Weebly
-    $response = wp_remote_post('https://api.weebly.com/v1/admin/app/payment_notifications', array(
-        'headers' => array(
-            'Content-Type' => 'application/json',
-            'x-weebly-access-token' => $access_token
-        ),
-        'body' => json_encode(array(
-            'name' => $product['name'] . ' Purchase',
-            'method' => 'purchase',
-            'kind' => 'single',
-            'term' => 'forever',
-            'gross_amount' => $gross,
-            'payable_amount' => $weebly_payout,
-            'currency' => $transaction['currency']
-        )),
-        'timeout' => 30
-    ));
-    
-    if (is_wp_error($response)) {
-        wpwa_stripe_log('Weebly notification failed: ' . $response->get_error_message());
+
+    /*
+     * Financial calculations
+     * Stripe: 2.9% + 0.30
+     * Weebly share: 30% of net
+     */
+
+    $gross = round((float)$transaction['amount'], 2);
+    $stripe_fee = round(($gross * 0.029) + 0.30, 2);
+    $net = round($gross - $stripe_fee, 2);
+    $weebly_payout = round($net * 0.30, 2);
+
+    // Force uppercase currency (Weebly expects this format)
+    $currency = strtoupper($transaction['currency'] ?: 'USD');
+
+    $payload = [
+        'name'            => $product['name'] . ' Purchase',
+        'method'          => 'purchase',
+        'kind'            => 'single',
+        'term'            => 'forever',
+        'gross_amount'    => $gross,
+        'payable_amount'  => $weebly_payout,
+        'currency'        => $currency
+    ];
+
+    // Log outgoing payload (for debugging if needed)
+    wpwa_stripe_log('Weebly request payload', $payload);
+
+    // Use cURL (same method that previously worked)
+    $curl = curl_init();
+
+    curl_setopt_array($curl, [
+        CURLOPT_URL            => "https://api.weebly.com/v1/admin/app/payment_notifications",
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_HTTPHEADER     => [
+            "Content-Type: application/json",
+            "cache-control: no-cache",
+            "x-weebly-access-token: " . $access_token
+        ],
+    ]);
+
+    $response = curl_exec($curl);
+    $http_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+
+    if (curl_errno($curl)) {
+        wpwa_stripe_log('Weebly cURL error', [
+            'error' => curl_error($curl)
+        ]);
+        curl_close($curl);
         return false;
     }
-    
-    $code = wp_remote_retrieve_response_code($response);
-    
-    if ($code === 200) {
-        // Mark as notified
+
+    curl_close($curl);
+
+    // Success
+    if ($http_code == 200) {
+
         global $wpdb;
         $table = $wpdb->prefix . 'wpwa_stripe_transactions';
-        
+
         $wpdb->update(
             $table,
-            array('weebly_notified' => 1),
-            array('id' => $transaction_id)
+            ['weebly_notified' => 1],
+            ['id' => $transaction_id],
+            ['%d'],
+            ['%d']
         );
-        
+
+        wpwa_stripe_log('Weebly notification successful', [
+            'transaction_id' => $transaction_id
+        ]);
+
         return true;
     }
-    
-    wpwa_stripe_log('Weebly notification error', array(
-        'code' => $code,
-        'response' => wp_remote_retrieve_body($response)
-    ));
-    
+
+    // Error logging
+    wpwa_stripe_log('Weebly notification error', [
+        'transaction_id' => $transaction_id,
+        'http_code'      => $http_code,
+        'response'       => $response
+    ]);
+
     return false;
 }
