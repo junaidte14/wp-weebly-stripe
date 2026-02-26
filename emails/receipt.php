@@ -155,7 +155,7 @@ function wpwa_stripe_get_receipt_email_html($data) {
                 <h2 style="margin: 0 0 8px; font-size: 26px; font-weight: 800; color: #ffffff; line-height: 1.2;">All-Access Subscription</h2>
                 
                 <div style="margin: 0 0 20px;">
-                    <span style="font-size: 42px; font-weight: 900; color: #fbbf24; line-height: 1;">$49.99</span>
+                    <span style="font-size: 42px; font-weight: 900; color: #fbbf24; line-height: 1;">$69.99</span>
                     <span style="font-size: 18px; color: rgba(255,255,255,0.9);">/year</span>
                 </div>
                 

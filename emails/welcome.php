@@ -216,7 +216,7 @@ function wpwa_stripe_get_subscriber_welcome_html($data) {
                                         <!-- Title & Price -->
                                         <h3 style="margin: 0 0 8px; font-size: 26px; font-weight: 800; color: #ffffff; text-align: center; line-height: 1.2;">All-Access Subscription</h3>
                                         <div style="text-align: center; margin-bottom: 20px;">
-                                            <span style="font-size: 42px; font-weight: 900; color: #fbbf24; line-height: 1;">$49.99</span>
+                                            <span style="font-size: 42px; font-weight: 900; color: #fbbf24; line-height: 1;">$69.99</span>
                                             <span style="font-size: 18px; color: rgba(255,255,255,0.9);">/year</span>
                                         </div>
                                         
