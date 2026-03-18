@@ -65,7 +65,8 @@ function wpwa_stripe_create_checkout_session($args) {
                 'weebly_site_id' => $args['weebly_site_id'] ?? '',
                 'product_id'     => $args['product_id'],
                 'access_token'   => wpwa_stripe_encrypt_token($args['access_token']),
-                'final_url'      => $args['final_url']
+                'final_url'      => $args['final_url'],
+                'app_source'   => 'weebly_licenses'
             )
         );
 

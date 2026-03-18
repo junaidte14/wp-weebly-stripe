@@ -157,7 +157,7 @@ function wpwa_stripe_handle_checkout_completed($session) {
     $metadata = ($session->metadata) ? $session->metadata->toArray() : [];
     
     // --- ADDED GUARD: Ignore WordPress License events ---
-    if (isset($metadata['app_source']) && $metadata['app_source'] === 'wp_licenses') {
+    if (!isset($metadata['app_source']) || $metadata['app_source'] !== 'weebly_licenses') {
         wpwa_stripe_log('Ignored checkout.session.completed: Belongs to WP Licenses');
         return array('success' => true, 'message' => 'Ignored: WP License event');
     }
@@ -242,7 +242,7 @@ function wpwa_stripe_handle_checkout_completed($session) {
 function wpwa_stripe_handle_payment_succeeded($payment_intent) {
     // --- ADDED GUARD ---
     $metadata = isset($payment_intent->metadata) ? $payment_intent->metadata->toArray() : [];
-    if (isset($metadata['app_source']) && $metadata['app_source'] === 'wp_licenses') {
+    if (!isset($metadata['app_source']) || $metadata['app_source'] !== 'weebly_licenses') {
         return array('success' => true, 'message' => 'Ignored: WP License event');
     }
     // -------------------
@@ -267,7 +267,7 @@ function wpwa_stripe_handle_payment_succeeded($payment_intent) {
 function wpwa_stripe_handle_payment_failed($payment_intent) {
     // --- ADDED GUARD ---
     $metadata = isset($payment_intent->metadata) ? $payment_intent->metadata->toArray() : [];
-    if (isset($metadata['app_source']) && $metadata['app_source'] === 'wp_licenses') {
+    if (!isset($metadata['app_source']) || $metadata['app_source'] !== 'weebly_licenses') {
         return array('success' => true, 'message' => 'Ignored: WP License event');
     }
     // -------------------
@@ -292,7 +292,7 @@ function wpwa_stripe_handle_subscription_created($subscription) {
     $metadata = $subscription->metadata ? $subscription->metadata->toArray() : array();
     
     // --- ADDED GUARD ---
-    if (isset($metadata['app_source']) && $metadata['app_source'] === 'wp_licenses') {
+    if (!isset($metadata['app_source']) || $metadata['app_source'] !== 'weebly_licenses') {
         wpwa_stripe_log('Ignored customer.subscription.created: Belongs to WP Licenses');
         return array('success' => true, 'message' => 'Ignored: WP License event');
     }
@@ -339,7 +339,7 @@ function wpwa_stripe_handle_subscription_created($subscription) {
 function wpwa_stripe_handle_subscription_updated($subscription) {
     // --- ADDED GUARD ---
     $metadata = $subscription->metadata ? $subscription->metadata->toArray() : array();
-    if (isset($metadata['app_source']) && $metadata['app_source'] === 'wp_licenses') {
+    if (!isset($metadata['app_source']) || $metadata['app_source'] !== 'weebly_licenses') {
         return array('success' => true, 'message' => 'Ignored: WP License event');
     }
     // -------------------
@@ -363,7 +363,7 @@ function wpwa_stripe_handle_subscription_updated($subscription) {
 function wpwa_stripe_handle_subscription_deleted($subscription) {
     // --- ADDED GUARD ---
     $metadata = $subscription->metadata ? $subscription->metadata->toArray() : array();
-    if (isset($metadata['app_source']) && $metadata['app_source'] === 'wp_licenses') {
+    if (!isset($metadata['app_source']) || $metadata['app_source'] !== 'weebly_licenses') {
         return array('success' => true, 'message' => 'Ignored: WP License event');
     }
     // -------------------
@@ -392,7 +392,7 @@ function wpwa_stripe_handle_invoice_paid($invoice) {
             $metadata = $stripe_sub->metadata->toArray();
 
             // --- ADDED GUARD: Prevent Weebly from saving WP Subscriptions to its DB ---
-            if (isset($metadata['app_source']) && $metadata['app_source'] === 'wp_licenses') {
+            if (!isset($metadata['app_source']) || $metadata['app_source'] !== 'weebly_licenses') {
                 wpwa_stripe_log("Ignored API fetched invoice for WP Licenses sub: " . $subscription_id);
                 return array('success' => true, 'message' => 'Ignored WP License invoice');
             }
@@ -453,7 +453,7 @@ function wpwa_stripe_handle_invoice_failed($invoice) {
 function wpwa_stripe_handle_refund($charge) {
     // --- ADDED GUARD ---
     $metadata = isset($charge->metadata) ? $charge->metadata->toArray() : [];
-    if (isset($metadata['app_source']) && $metadata['app_source'] === 'wp_licenses') {
+    if (!isset($metadata['app_source']) || $metadata['app_source'] !== 'weebly_licenses') {
         return array('success' => true, 'message' => 'Ignored: WP License event');
     }
     // -------------------
