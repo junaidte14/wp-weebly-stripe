@@ -6,13 +6,16 @@
 
 if (!defined('ABSPATH')) exit;
 
-// Load dependencies
-require_once WPWA_STRIPE_DIR . '/lib/Util/HMAC.php';
-require_once WPWA_STRIPE_DIR . '/lib/Weebly/WeeblyClient.php';
+// Load dependencies safely
+if ( ! class_exists( 'HMAC' ) ) {
+    require_once WPWA_STRIPE_DIR . '/lib/Util/HMAC.php';
+}
+
+if ( ! class_exists( 'WeeblyClient' ) ) {
+    require_once WPWA_STRIPE_DIR . '/lib/Weebly/WeeblyClient.php';
+}
 
 function wpwa_stripe_handle_phase_one() {
-    error_log("WPWA Debug: Entering handle_phase_one. Params: " . print_r($_GET, true));
-
     // --- 1. LEGACY FIXER ---
     if ( strpos( $_SERVER['QUERY_STRING'], '?' ) !== false ) {
         error_log("WPWA Debug: Detected double '?' symbols. Fixing URL.");
@@ -134,18 +137,13 @@ function wpwa_stripe_handle_oauth_callback_old($product) {
     $access_token = $token_response->access_token;
     $final_url = $token_response->callback_url ?? $callback_url;
     
-    error_log("WPWA Debug: [Phase 2] Token obtained. Final Redirect URL: " . $final_url);
-
     // Get user info from Weebly API
     $user_info = wpwa_stripe_get_weebly_user_info($access_token, $user_id);
     $email = $user_info['email'] ?? '';
     $name = $user_info['name'] ?? '';
     
-    error_log("WPWA Debug: [Phase 2] Weebly User Info: Email: $email, Name: $name");
-
     // Check if user already has active access
     if (wpwa_stripe_user_has_active_access($user_id, $product['id'])) {
-        error_log("WPWA Debug: [Phase 2] Active access detected for User $user_id. Skipping checkout.");
         
         add_filter('allowed_redirect_hosts', function($hosts) {
             $hosts[] = 'www.weebly.com';
@@ -166,19 +164,15 @@ function wpwa_stripe_handle_oauth_callback_old($product) {
         'pr_id'          => $product['pr_id'] ? $product['pr_id'] : $product['id']
     );
     
-    error_log("WPWA Debug: [Phase 2] Creating Stripe Checkout Session with args: " . print_r($checkout_args, true));
-
     $session_result = wpwa_stripe_create_checkout_session($checkout_args);
 
     // Check if the result is an array and specifically extract the 'url'
     if (is_array($session_result) && !empty($session_result['url'])) {
         $checkout_url = $session_result['url'];
     } else {
-        error_log("WPWA Error: Stripe session failed. Response: " . print_r($session_result, true));
         wp_die('Failed to create checkout session. Error: ' . ($session_result['message'] ?? 'Unknown Error'));
     }
 
-    error_log("WPWA Debug: [Phase 2] Redirecting to Stripe URL: " . $checkout_url);
     wp_redirect($checkout_url);
     exit;
 
@@ -188,7 +182,6 @@ function wpwa_stripe_handle_oauth_callback_old($product) {
  * Handle OAuth callback and redirect to Stripe Checkout
  */
 function wpwa_stripe_handle_oauth_callback($product) {
-    error_log("WPWA Debug: [Phase 2] Callback reached for Product ID: " . $product['id']);
     $client_id = $product['client_id'];
     $client_secret = $product['client_secret'];
     
@@ -197,8 +190,6 @@ function wpwa_stripe_handle_oauth_callback($product) {
     $site_id = sanitize_text_field($_GET['site_id'] ?? '');
     $callback_url = isset($_GET['callback_url']) ? esc_url_raw($_GET['callback_url']) : '';
 
-    error_log("WPWA Debug: [Phase 2] Context - User: $user_id, Site: $site_id, Code: " . substr($authorization_code, 0, 5) . "...");
-    
     // Exchange code for access token
     $weebly_client = new WeeblyClient(
         $client_id,
@@ -210,22 +201,19 @@ function wpwa_stripe_handle_oauth_callback($product) {
     $token_response = $weebly_client->getAccessToken($authorization_code, $callback_url);
     
     if (empty($token_response->access_token)) {
-        error_log("WPWA Error: [Phase 2] Token exchange failed. Response: " . print_r($token_response, true));
         wp_die('Failed to obtain access token from Weebly');
     }
     
     $access_token = $token_response->access_token;
     $final_url = $token_response->callback_url ?? $callback_url;
 
-    error_log("WPWA Debug: [Phase 2] Token obtained. Final Redirect URL: " . $final_url);
-    
     // Get user info from Weebly API (optional - to get email/name)
     $user_info = wpwa_stripe_get_weebly_user_info($access_token, $user_id);
     
     $email = $user_info['email'] ?? '';
     $name = $user_info['name'] ?? '';
 
-    error_log("WPWA Debug: [Phase 2] Weebly User Info: Email: $email, Name: $name");
+    error_log("WPWA Debug: [Phase 2] Full User Info: " . json_encode($user_info));
     
     // ========================================
     // UNIVERSAL ACCESS CHECK
@@ -278,21 +266,158 @@ function wpwa_stripe_handle_oauth_callback($product) {
         'final_url' => $final_url,
         'pr_id'          => $product['pr_id'] ? $product['pr_id'] : $product['id']
     );
-    
-    error_log("WPWA Debug: [Phase 2] Creating Stripe Checkout Session with args: " . print_r($checkout_args, true));
 
     $session_result = wpwa_stripe_create_checkout_session($checkout_args);
     
     if (is_array($session_result) && !empty($session_result['url'])) {
         $checkout_url = $session_result['url'];
     } else {
-        error_log("WPWA Error: Stripe session failed. Response: " . print_r($session_result, true));
         wp_die('Failed to create checkout session. Error: ' . ($session_result['message'] ?? 'Unknown Error'));
     }
     
-    error_log("WPWA Debug: [Phase 2] Redirecting to Stripe URL: " . $checkout_url);
-    wp_redirect($checkout_url);
+    //wp_redirect($checkout_url);
+    wpwa_stripe_show_product_card($product, $checkout_url, $user_id, $site_id, $email);
     exit;
+}
+
+/**
+ * Displays a professional product card with integrated site identity and footer
+ */
+function wpwa_stripe_show_product_card($product, $checkout_url, $user_id, $site_id, $email) {
+    get_header();
+    // Configuration
+    $upsell_url = 'https://codoplex.com/codoplex-weebly-apps-subscription/';
+    $site_title = get_bloginfo('name');
+    $logo_url   = 'https://codoplex.com/wp-content/uploads/2022/05/cropped-Logo-Icon-300x300codoplex-300x300-1-100x100.png'; 
+    // Price Formatting from your $product array
+    $price_val = $product['price'] ?? 0.00;
+    $display_price = number_format($price_val, 2);
+    
+    // Determine billing text (e.g., "per year" or "one-time")
+    $billing_text = 'one-time payment';
+    if (!empty($product['is_recurring'])) {
+        $unit = $product['cycle_unit'] ?? 'year';
+        $billing_text = 'per ' . $unit;
+    }
+    ?>
+    
+    <style>
+        .wpwa-checkout-page { 
+            padding: 0 20px; 
+            background: #f8fafc; 
+            display: flex; 
+            flex-direction: column;
+            align-items: center;
+            min-height: 70vh;
+        }
+        .checkout-container { 
+            background: white; 
+            border-radius: 16px; 
+            box-shadow: 0 15px 35px rgba(0,0,0,0.1); 
+            max-width: 500px; 
+            width: 100%; 
+            border: 1px solid #e2e8f0;
+            overflow: hidden; /* Keeps header/footer rounded */
+        }
+
+        /* Integrated Header */
+        .card-header {
+            padding: 20px;
+            border-bottom: 1px solid #f1f5f9;
+            text-align: center;
+        }
+        .card-header img { max-height: 50px; margin-bottom: 10px; }
+        .card-header h2 { margin: 0; font-size: 18px; color: #64748b; font-weight: 500; text-transform: uppercase; letter-spacing: 1px; }
+
+        /* Main Content Body */
+        .card-body { padding: 20px; text-align: center; }
+        
+        .product-badge { background: #e1f5fe; color: #0288d1; padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 15px; display: inline-block; }
+        .card-body h1 { margin: 10px 0; font-size: 28px; color: #1a1a1a; line-height: 1.2; }
+        .price-tag { font-size: 24px; font-weight: 700; color: #10b981; margin: 10px 0 25px 0; }
+        
+        /* Price Display */
+        .price-container { margin: 15px 0 25px 0; }
+        .price-amount { font-size: 48px; font-weight: 800; color: #10b981; display: block; line-height: 1; }
+        .price-currency { font-size: 20px; vertical-align: top; margin-right: 2px; position: relative; top: 8px; }
+        .price-period { font-size: 14px; color: #94a3b8; font-weight: 500; margin-top: 5px; display: block; }
+        
+        .details-box { background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 8px; padding: 15px; margin-bottom: 25px; text-align: left; }
+        .details-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+        .details-row label { color: #94a3b8; }
+        .details-row span { color: #1e293b; font-family: monospace; font-weight: 600; }
+
+        .btn-stripe { display: block; background: #6366f1; color: white !important; text-decoration: none; padding: 16px; border-radius: 8px; font-weight: 700; font-size: 18px; transition: all 0.2s; box-shadow: 0 4px 6px rgba(99, 102, 241, 0.2); }
+        .btn-stripe:hover { background: #4f46e5; transform: translateY(-1px); }
+        
+        .btn-upsell { display: block; background: #fff; color: #6366f1 !important; border: 2px solid #6366f1; text-decoration: none; padding: 12px; border-radius: 8px; font-weight: 600; transition: all 0.2s; margin-top: 20px; font-size: 14px; }
+        .btn-upsell:hover { background: #f5f5ff; }
+        
+        /* Integrated Footer */
+        .card-footer {
+            background: #f8fafc;
+            padding: 20px;
+            border-top: 1px solid #f1f5f9;
+            text-align: center;
+        }
+        .footer-links { margin-bottom: 10px; }
+        .footer-links a { font-size: 12px; color: #64748b; text-decoration: none; margin: 0 8px; font-weight: 500; }
+        .footer-links a:hover { color: #6366f1; }
+        .copyright { font-size: 11px; color: #94a3b8; margin: 0; }
+        #header,hr{display:none;}
+    </style>
+
+    <div class="wpwa-checkout-page">
+        <div class="checkout-container">
+            <div class="card-header">
+                <?php if ($logo_url): ?>
+                    <img src="<?php echo esc_url($logo_url); ?>" alt="<?php echo esc_attr($site_title); ?>">
+                <?php endif; ?>
+                <h2><?php echo esc_html($site_title); ?></h2>
+            </div>
+
+            <div class="card-body">
+                <div class="product-badge">Confirm Subscription</div>
+                <h1><?php echo esc_html($product['name'] ?? 'Product Selection'); ?></h1>
+                <div class="price-tag">
+                    <?php echo ($product['is_recurring'] ? 'Subscription' : 'Lifetime Access'); ?>
+                </div>
+                
+                <div class="price-container">
+                    <span class="price-amount">
+                        <span class="price-currency">$</span><?php echo esc_html($display_price); ?>
+                    </span>
+                    <span class="price-period">
+                        <?php echo esc_html($billing_text); ?>
+                    </span>
+                </div>
+
+                <div class="details-box">
+                    <div class="details-row"><label>User ID:</label> <span><?php echo esc_html($user_id); ?></span></div>
+                    <div class="details-row"><label>Site ID:</label> <span><?php echo esc_html($site_id); ?></span></div>
+                </div>
+
+                <a href="<?php echo esc_url($checkout_url); ?>" class="btn-stripe">Proceed to Secure Payment →</a>
+
+                <a href="<?php echo esc_url($upsell_url); ?>" target="_blank" class="btn-upsell">
+                    🚀 Upgrade to All-in-One Whitelist
+                </a>
+            </div>
+
+            <div class="card-footer">
+                <div class="footer-links">
+                    <a href="<?php echo esc_url('https://codoplex.com/privacy-policy/'); ?>" target="_blank">Privacy</a>
+                    <a href="<?php echo esc_url('https://codoplex.com/terms-and-conditions/'); ?>" target="_blank">Terms</a>
+                    <a href="<?php echo esc_url('https://codoplex.com/refund-policy/'); ?>" target="_blank">Refunds</a>
+                </div>
+                <p class="copyright">
+                    © <?php echo date('Y'); ?> <?php echo esc_html($site_title); ?>. All rights reserved.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <?php
 }
 
 /**
